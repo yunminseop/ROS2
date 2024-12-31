@@ -20,7 +20,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'server = central_control.server:main'
+            "server = central_control.server:main",
+            "individual = central_control.individual:main",
+            "commander = central_control.commander:main",
         ],
     },
 )
