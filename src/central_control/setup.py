@@ -23,6 +23,8 @@ setup(
             "server = central_control.server:main",
             "individual = central_control.individual:main",
             "commander = central_control.commander:main",
+            "test_with_turtle = central_control.test_with_turtle:main",
+            "service_provider = central_control.service_provider:main",
         ],
     },
 )
