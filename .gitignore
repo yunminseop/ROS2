@@ -6,6 +6,15 @@ __pycache__/
 # C extensions
 *.so
 
+# Ignore shell script and setup files
+*.sh
+*.bash
+*.ps1
+*.zsh
+
+# Ignore log files
+*.log
+
 # Distribution / packaging
 .Python
 build/
