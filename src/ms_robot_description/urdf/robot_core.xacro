@@ -1,6 +1,7 @@
 <?xml version="1.0"?>
 <robot name="ms_robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
     <xacro:property name="wheel_separation" value="0.180"/>
+
     <link name = "base_link">
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -13,12 +14,13 @@
     <joint name="left_wheel_joint" type="continuous">
         <parent link="base_link"/>
         <child link="left_wheel"/>
-        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <origin xyz="0 ${wheel_separation/2} 0" rpy="0 0 0"/>
         <axis xyz="0 1 0"/>
     </joint>
 
     <link name="left_wheel">
         <visual>
+            <origin xyz="0 0 0" rpy="0 0 ${pi/2}"/>
             <geometry>
                 <mesh filename="package://ms_robot_description/meshes/visual/wheel.dae" scale="1 1 1"/>
             </geometry>
@@ -28,12 +30,13 @@
     <joint name="right_wheel_joint" type="continuous">
         <parent link="base_link"/>
         <child link="right_wheel"/>
-        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <origin xyz="0 ${-wheel_separation/2} 0" rpy="0 0 0"/>
         <axis xyz="0 1 0"/>
     </joint>
 
     <link name="right_wheel">
         <visual>
+            <origin xyz="0 0 0" rpy="0 0 ${-pi/2}"/>
             <geometry>
                 <mesh filename="package://ms_robot_description/meshes/visual/wheel.dae" scale="1 1 1"/>
             </geometry>

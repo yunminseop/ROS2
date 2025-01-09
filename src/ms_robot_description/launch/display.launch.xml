@@ -7,7 +7,7 @@
         <param name="robot_description" value="$(command 'xacro $(find-pkg-share ms_robot_description)/urdf/robot_core.xacro')" />
     </node>
 
-    <node pkg="joint_state_publisher" exec="joint_state_publisher" name="joint_state_publisher" output="screen"/>
+    <node pkg="joint_state_publisher_gui" exec="joint_state_publisher_gui" name="joint_state_publisher" output="screen"/>
 
     <node pkg="rviz2" exec="rviz2" output="screen" args="-d $(var default_rviz_config_path)" />
 </launch>
