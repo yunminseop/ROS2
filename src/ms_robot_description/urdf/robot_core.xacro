@@ -43,4 +43,50 @@
         </visual>
     </link>
 
+    <link name="ul_sensor_mount">
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://ms_robot_description/meshes/visual/ul_sensor.dae" scale="1 1 1"/>
+            </geometry>
+        </visual>
+    </link>
+
+    <joint name="ul_sensor_mount_fixed_joint" type="fixed">
+        <parent link="base_link"/>
+        <child link="ul_sensor_mount"/>
+        <origin xyz="0.03 0 0.01" rpy="0 0 0"/>
+    </joint>
+
+    <link name="ul_sensor_link"/>
+
+    <joint name="ul_sensor_link_fixed_joint" type="fixed">
+        <parent link="ul_sensor_mount"/>
+        <chile link="ul_sensor_link"/>
+        <origin xyz="0.02 0 0" rpy="0 0 0"/>
+    </joint>
+
+    <link name="ydlidar_lidar_mount">
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://ms_robot_description/meshes/visual/ydlidar_x2_assy.dae" scale="1 1 1"/>
+            </geometry>
+        </visual>
+    </link>
+
+    <joint name="lidar_mount_fixed_joint" type="fixed">
+        <parent link="base_link"/>
+        <child link="ydlidar_lidar_mount"/>
+        <origin xyz="-0.01 0 0.085" rpy="0 0 0"/>
+    </joint>
+
+    <link name="laser_link"/>
+
+    <joint name="laser_link_fixed_joint" type="fixed">
+        <parent link="ydlidar_lidar_mount"/>
+        <child link="laser_link"/>
+        <origin xyz="0 0 0.0425" rpy="0 0 0"/>
+    </joint>
+
 </robot>
