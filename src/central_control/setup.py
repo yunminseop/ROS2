@@ -1,15 +1,18 @@
 from setuptools import find_packages, setup
+import os
+import glob
 
 package_name = 'central_control'
 
 setup(
     name=package_name,
     version='0.0.0',
-    packages=find_packages(exclude=['test']),
+    packages=[package_name],
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ("share/" + package_name + "/launch", glob.glob(os.path.join("launch", "*.launch.py")))
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -25,6 +28,8 @@ setup(
             "commander = central_control.commander:main",
             "test_with_turtle = central_control.test_with_turtle:main",
             "service_provider = central_control.service_provider:main",
+            "dist_turtle_action_server = central_control.dist_turtle_action_server:main",
+            "my_multi_thread = central_control.my_multi_thread:main",
         ],
     },
 )
