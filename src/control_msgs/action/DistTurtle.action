@@ -10,4 +10,4 @@ float32 pos_theta
 float32 result_dist
 ---
 #Feedback
-float32 remained_dist
+float32 remain_dist

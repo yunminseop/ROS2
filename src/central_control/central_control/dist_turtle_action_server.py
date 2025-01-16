@@ -20,7 +20,7 @@ class TurtleSub_Action(Individual):
 
     def callback(self, msg):
         self.ac_server.current_pose = msg
-        print("X:", msg.x, ", Y:", msg.y)
+        # print("X:", msg.x, ", Y:", msg.y)
 
 class DistTurtleServer(Node):
     def __init__(self):
