@@ -30,6 +30,8 @@ setup(
             "service_provider = central_control.service_provider:main",
             "dist_turtle_action_server = central_control.dist_turtle_action_server:main",
             "my_multi_thread = central_control.my_multi_thread:main",
+            "MainServer = central_control.MainServer:main",
+            # "Driver = central_control.Driver:main",
         ],
     },
 )
