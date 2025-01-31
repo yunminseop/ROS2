@@ -5,7 +5,8 @@ from ultralytics import YOLO
 import socket
 import cv2
 import numpy as np
-from geometry_msgs.msg import Twist
+import torch
+from central_msg.msg import Slope
 import gc
 
 class UdpReceiverNode(Node):
@@ -14,11 +15,11 @@ class UdpReceiverNode(Node):
         self.model = model
 
         self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.udp_socket.bind(("192.168.4.14", 8080))
+        self.udp_socket.bind(("192.168.4.13", 8080))
         self.get_logger().info("Socket bound to 192.168.0.30:8080")
 
-        self.publisher = self.create_publisher(Twist, "/object_info", 10)
-        self.execute_timer = self.create_timer(0.1, self.image_processing)
+        self.publisher = self.create_publisher(Slope, "/slope", 10)
+        self.execute_timer = self.create_timer(0.1, self.receive_and_command)
 
         self.unit = Conversion(1920, 1080, 16.1)
 
@@ -32,7 +33,7 @@ class UdpReceiverNode(Node):
         self.intersection_finder = GetIntersection(self.ellipse_center, self.ellipse_axes)
         self.frame = None
 
-    def image_processing(self):
+    def receive_and_command(self):
         try:
             data, addr = self.udp_socket.recvfrom(65536)
             self.get_logger().info(f"Received data from {addr}")
@@ -88,14 +89,12 @@ class UdpReceiverNode(Node):
                 self.slope = np.arctan(self.x/(0.396*self.y+6.3)) if point[1] != 0 else np.arctan(self.x)
                         
                 self.slope = np.degrees(self.slope)
-                
-                # for test
-                msg = Twist()
-                msg.linear.x = 1.0
-                msg.angular.z = 1.0
 
-                self.publisher.publish(msg)
+                msg = Slope()
+                msg.slope = self.slope
                 
+                self.publisher.publish(msg)
+                print(f"msg.slope: {msg.slope}")
                 del self.frame
                 gc.collect()
 
@@ -206,7 +205,10 @@ class GetIntersection:
 def main(args=None):
     checkpoint_path = '/root/asap/data/best.pt'
 
-    model = YOLO(checkpoint_path, verbose=False)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+
+    model = YOLO(checkpoint_path, verbose=False).to(device)
 
     rclpy.init(args=args)
     node = UdpReceiverNode(model)
