@@ -10,9 +10,10 @@ from central_msg.msg import Slope
 import gc
 
 class UdpReceiverNode(Node):
-    def __init__(self, model):
+    def __init__(self, seg_model, detect_model):
         super().__init__('udp_receiver_node')
-        self.model = model
+        self.seg_model = seg_model
+        self.detect_model = detect_model
 
         self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp_socket.bind(("192.168.4.13", 8080))
@@ -25,13 +26,25 @@ class UdpReceiverNode(Node):
 
         self.ellipse_center = (320, 640)
         self.ellipse_axes = (320, 100)
-        
         self.center = Centroid()
         self.slope = 0.0
         self.prev_masks = [0, 0, 640, 0, 640, 640, 0, 640]
         self.standard_point = (320, 540)
         self.intersection_finder = GetIntersection(self.ellipse_center, self.ellipse_axes)
+
         self.frame = None
+
+        """
+        nav_signal: result of global path planning
+        detection: object detection output
+        mask_list: to choose a center way of mine. """
+
+        self.nav_signal = None
+        self.go_left = None
+        self.goNstop = None
+        self.destination = None
+        self.prev_mode = None
+
 
     def receive_and_command(self):
         try:
@@ -48,27 +61,56 @@ class UdpReceiverNode(Node):
             if self.frame is not None:
                 frame_resized = cv2.resize(self.frame, (640, 640))
             
-                results = self.model.predict(frame_resized)
+                seg_results = self.seg_model.predict(frame_resized)
+                det_results = self.detect_model.predict(frame_resized)
                 
-                for result in results:
-                    boxes = result.boxes.xyxy.cpu().numpy()
-                    classes = result.boxes.cls.cpu().numpy()
-                    """
-                    cls_id = {0: center, 1: right, 2: left, 7: safety zone}
-                    """
-                    masks = result.masks.xy if result.masks else None
-                    # print(classes)
+                """ object detection process """
+                if det_results:
+                    for det_result in det_results:
+                    
+                        classes = det_result.boxes.cls.cpu().numpy()
+                        boxes = det_result.boxes.xyxy.cpu().numpy()  # (x_min, y_min, x_max, y_max)
+                        
+                        for cls_id in classes:
+                            f"Object: {self.detect_model.names[int(cls_id)]}"
+                            if cls_id == 0: # go left arrow
+                                self.go_left = True
+                            elif cls_id == 1: # green light
+                                self.goNstop = True
+                            """ to be continue ... """
+                                
+
+                """ segmentation process """
+                for seg_result in seg_results:
+                    
+                    classes = seg_result.boxes.cls.cpu().numpy() #cls_id = {0: center, 1: right, 2: left, 7: safety zone}
+                    masks = seg_result.masks.xy if seg_result.masks else None
 
                     if masks != None:
                         prev_masks = masks
+                        """ classes = [cls_id[0], cls_id[1], cls_id[2], ... ]
+                            masks = [mask[0], mask[1], mask[2], ... ]
+                                    mask[0] = [[20.2, 428.5], [167.0, 39.4], [420.7, 350.9], ...] (polygon)"""
+
                         for cls_id, mask in zip(classes, masks):
-                            if cls_id == 0:
-                                print(f"Class: {self.model.names[int(cls_id)]}")
-                                self.center.get_centroid(mask)
+
+                            if cls_id == 2: # if go_left_arrow detected and left lane exists:
+                                if self.go_left == True:
+                                    self.destination = mask
+
+                            else: # 
+                                if cls_id == 0:
+                                    print(f"Class: {self.seg_model.names[int(cls_id)]}")
+                                    self.destination = mask
+                                
                     elif prev_masks:
                                 for cls_id, mask in zip(classes, prev_masks):
                                     if cls_id == 0:
-                                        self.center.get_centroid(mask)
+                                        self.destination = mask
+
+
+
+                    self.center.get_centroid(self.destination)
 
                 dynamic_point = (self.center.centroid_x, self.center.centroid_y)
                 self.intersection_finder.set_dynamic_line(dynamic_point)
@@ -203,15 +245,17 @@ class GetIntersection:
     
 
 def main(args=None):
-    checkpoint_path = '/root/asap/data/best.pt'
+    seg_checkpoint_path = '/root/asap/data/best.pt'
+    det_checkpoint_path = ''
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "gpu" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
-    model = YOLO(checkpoint_path, verbose=False).to(device)
+    seg_model = YOLO(seg_checkpoint_path, verbose=False).to(device)
+    det_model = YOLO(det_checkpoint_path, verbose=False).to(device)
 
     rclpy.init(args=args)
-    node = UdpReceiverNode(model)
+    node = UdpReceiverNode(seg_model, det_model)
 
     executor = MultiThreadedExecutor()
     executor.add_node(node)
