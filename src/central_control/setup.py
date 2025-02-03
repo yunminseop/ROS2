@@ -32,6 +32,7 @@ setup(
             "my_multi_thread = central_control.my_multi_thread:main",
             "MainServer = central_control.MainServer:main",
             "udp_receiver = central_control.MainServer:main",
+            "img_sender = central_control.img_sender:main",
         ],
     },
 )
