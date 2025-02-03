@@ -2,8 +2,6 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from ultralytics import YOLO
-import matplotlib.pyplot as plt
-from scipy.special import binom
 import socket
 import cv2
 import numpy as np
@@ -25,8 +23,15 @@ class UdpReceiverNode(Node):
         self.execute_timer = self.create_timer(0.1, self.receive_and_command)
 
         self.unit = Conversion(1920, 1080, 16.1)
+
+        self.ellipse_center = (320, 640)
+        self.ellipse_axes = (320, 100)
         self.center = Centroid()
-        self.lookahead_distance = 60
+        self.slope = 0.0
+        self.prev_masks = [0, 0, 640, 0, 640, 640, 0, 640]
+        self.standard_point = (320, 540)
+        self.intersection_finder = GetIntersection(self.ellipse_center, self.ellipse_axes)
+
         self.frame = None
 
         """
@@ -34,7 +39,11 @@ class UdpReceiverNode(Node):
         detection: object detection output
         mask_list: to choose a center way of mine. """
 
-        self.car_position = np.array([320, 940])
+        self.nav_signal = None
+        self.go_left = None
+        self.goNstop = None
+        self.destination = None
+        self.prev_mode = None
 
 
     def receive_and_command(self):
@@ -100,19 +109,39 @@ class UdpReceiverNode(Node):
                                         self.destination = mask
 
 
+
                     self.center.get_centroid(self.destination)
 
-                    processor = PurePursuit(self.destination)
+                dynamic_point = (self.center.centroid_x, self.center.centroid_y)
+                self.intersection_finder.set_dynamic_line(dynamic_point)
 
-                    bezier_points = processor.get_bezier_points(self.car_position, self.center)
-                    bezier_path = processor.bezier_curve(bezier_points)
-                    lookahead_point = processor.find_lookahead_point(bezier_path, self.car_position, self.lookahead_distance)
+                points = self.intersection_finder.calculate_intersection()
+                
+                if points:
+                    valid_points = self.intersection_finder.filter_valid_points(points, 640, 640)
+                    for point in valid_points:
                     
-                    print(f"lookahead_point: {lookahead_point}")
+                        if (640-point[0])*(self.unit.p2cm()) < 320*self.unit.p2cm():
+                            self.x = -(320 - point[0])*self.unit.p2cm()
+                        else:
+                            self.x = (point[0] - 320)*self.unit.p2cm()
 
-                    msg = Slope()
-                    msg.slope = 
+                    self.y = (640-point[1])*self.unit.p2cm()*7.5
 
+                self.slope = np.arctan(self.x/(0.396*self.y+6.3)) if point[1] != 0 else np.arctan(self.x)
+                        
+                self.slope = np.degrees(self.slope)
+
+                msg = Slope()
+                msg.slope = self.slope
+                
+                self.publisher.publish(msg)
+                print(f"msg.slope: {msg.slope}")
+                del self.frame
+                gc.collect()
+
+            else:
+                self.get_logger().error("Failed to decode image")
         except Exception as e:
             self.get_logger().error(f"Error receiving or displaying image: {e}")
 
@@ -121,58 +150,6 @@ class UdpReceiverNode(Node):
         cv2.destroyAllWindows()
         self.get_logger().info("UDP Receiver Node stopped")
         super().destroy_node()
-
-class PurePursuit():
-    def __init__(self, lane_polygon):
-        self.lane_polygon = lane_polygon
-
-
-    def get_bezier_points(self, car_position, centroid):
-        trans_polygon = self.lane_polygon.copy()
-        dest = self.find_nearest_value(trans_polygon[:, 0], centroid[0])
-        target_y = trans_polygon[trans_polygon[:, 0]==dest][0][1]
-
-        dist = centroid[1] - target_y
-
-        if dist > 0:
-            trans_polygon[:, 1] += int(dist)
-        else:
-            trans_polygon[:, 1] -= int(dist)
-
-        sort_index = np.argsort(trans_polygon[:, 1])
-        y_max = trans_polygon[sort_index[0]]
-
-        """ car_position ~ centroid"""
-        mid_control1 = (car_position[0]-(car_position[0] - centroid[0]) / 3, 1000 - ((car_position[1] - centroid[1]) * 5 / 10))
-        mid_control2 = (car_position[0]-(car_position[0] - centroid[0]) * 2 / 3, 1000- ((car_position[1] - centroid[1]) * 8 / 10))
-
-        """ centroid ~ y_max"""
-        mid_control3 = (centroid[0]-(centroid[0] - y_max[0]) / 3, centroid[1] - ((centroid[1] - y_max[1]) * 5 / 10))
-        mid_control4 = (centroid[0]-(centroid[0] - y_max[0]) * 2 / 3, centroid[1]- ((centroid[1] - y_max[1]) * 8 / 10))
-
-        return (car_position, mid_control1, mid_control2, mid_control3, mid_control4, y_max)
-
-
-    def bezier_curve(self, bezier_points, num_points=100):
-        n = len(bezier_points) - 1
-        t_values = np.linspace(0, 1, num_points)
-        curve = np.zeros((num_points, 2))
-    
-        for i in range(n + 1):
-            bernstein_poly = binom(n, i) * (t_values ** i) * ((1 - t_values) ** (n - i))
-            curve += np.outer(bernstein_poly, bezier_points[i])
-        
-            return curve
-
-    def find_lookahead_point(self, curve, current_pos, lookahead_distance):
-        distances = np.linalg.norm(curve - current_pos, axis=1)
-        idx = np.argmin(np.abs(distances - lookahead_distance))
-        return curve[idx]
-
-    def find_nearest_value(self, arr, value):
-        idx = np.argmin(np.abs(arr - value))
-        return arr[idx]
-
 
 
 class Conversion:
@@ -186,10 +163,8 @@ class Conversion:
         self.x = 0
         self.y = 0
 
-    def p2cm(self, cm):
-        res = cm / (2.54 / self.__PPI)
-
-        return  res
+    def p2cm(self):
+        return  2.54 / self.__PPI
 
 
 class Centroid():
@@ -212,6 +187,61 @@ class Centroid():
         if area != 0:
             self.centroid_x /= (6 * area)
             self.centroid_y /= (6 * area)
+
+class GetIntersection:
+    def __init__(self, ellipse_center, ellipse_axes):
+        self.h, self.k = ellipse_center  
+        self.a, self.b = ellipse_axes   
+        self.fixed_point = (320, 640) # center of a frame
+
+    def set_dynamic_line(self, target_point):
+        x0, y0 = self.fixed_point
+        x1, y1 = target_point
+
+        # slope
+        self.m = (y1 - y0) / (x1 - x0) if x1 != x0 else float('inf')  # x1 == x0일 경우 수직선
+        
+        # y_intersection
+        self.c = y0 - self.m * x0
+
+
+    def calculate_intersection(self):
+        """get an intersection"""
+
+        if self.m == float('inf'):
+            return[[320, 540], [320, 740]]
+        
+        A = (1 / self.a**2) + (self.m**2 / self.b**2)
+        B = (2 * self.m * (self.c - self.k) / self.b**2) - (2 * self.h / self.a**2)
+        C = ((self.h**2) / self.a**2) + ((self.c - self.k)**2 / self.b**2) - 1
+        
+        # D = b^2 - 4ac
+        discriminant = B**2 - 4 * A * C
+
+        if discriminant < 0:
+            return None  # no intersection
+
+        x1 = (-B + np.sqrt(discriminant)) / (2 * A)
+        x2 = (-B - np.sqrt(discriminant)) / (2 * A)
+
+        y1 = self.m * x1 + self.c
+        y2 = self.m * x2 + self.c
+
+        if x1 > 0 and y1 > 0 or x1 < 0 and y1 > 0 :
+            self.upper_point = (x1, y1)
+        elif x2 > 0 and y2 > 0 or x2 < 0 and y2 > 0:
+            self.upper_point = (x2, y2)
+
+        return [[x1, y1], [x2, y2]]
+
+    def filter_valid_points(self, points, width, height):
+        """filtering only valid point 1, 2 quadrant"""
+        valid_points = [
+            (int(x), int(y)) for x, y in points
+            if 0 <= x <= width and 0 <= y <= height
+        ]
+        # print(f"valid_p: {valid_points}")
+        return valid_points
     
 
 def main(args=None):
