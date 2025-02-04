@@ -29,7 +29,8 @@ class UdpReceiverNode(Node):
         self.get_logger().info("Socket bound to 192.168.100.8:8080")
 
         self.publisher = self.create_publisher(Slope, "/slope", 10)
-        self.execute_timer = self.create_timer(0.1, self.receive_and_command)
+        self.execute_timer = self.create_timer(0.033, self.receive_and_command)
+        
         self.prev_mask = None
         self.unit = Conversion(1920, 1080, 16.1)
         self.center = Centroid()
@@ -42,6 +43,7 @@ class UdpReceiverNode(Node):
         mask_list: to choose a center way of mine. """
 
         self.car_position = np.array([320, 940])
+        self.prev_slope = 0.0
 
     def receive_and_command(self):
         try:
@@ -107,12 +109,31 @@ class UdpReceiverNode(Node):
 
             bezier_path = processor.bezier_curve(self.bezier_points)
             lookahead_point = processor.find_lookahead_point(bezier_path, self.car_position, lookahead_distance)
-            print(f"lookahead_point: {lookahead_point}")
+            # print(f"lookahead_point: {lookahead_point}")
             
             slope = self.get_slope(lookahead_point)
-
+            try:
+                if math.copysign(1,slope) != math.copysign(1,self.prev_slope) and np.abs(slope - self.prev_slope) > 10:
+                    # print("<이상값 감지>")
+                    # print(f"보정 전 slope: {slope:.3f} deg")
+                    # print(f"보정 후 slope: {self.prev_slope:.3f} deg")
+                    print(f"*****({slope})*****")
+                    slope = self.prev_slope
+                    # print("-------------")
+                else:
+                    print(f"slope: {slope:.3f} deg")
+                    self.prev_slope = slope
+            except:
+                print("Prev_slope doesnt exist.")
+            
             msg = Slope()
-            msg.slope = slope
+
+            msg.curr_slope = slope
+            msg.target_slope = 0.0
+            msg.diff = 0.0 - slope
+
+            # print(msg.curr_slope, msg.target_slope, msg.diff)
+            self.get_logger().info(f"Publishing: {msg.curr_slope}, {msg.target_slope}, {msg.diff}")
 
             self.publisher.publish(msg)
 
@@ -124,15 +145,19 @@ class UdpReceiverNode(Node):
         x1, y1 = self.car_position
         x2, y2 = lookahead_point
 
-        delta_y = y1 - y2 
+        delta_y = y1 - y2  # 차량 위치가 위로 가야 하므로 y1 - y2
         delta_x = x1 - x2
 
+        # 기울기에서 각도 계산 (라디안)
         desired_angle = math.atan2(delta_x, delta_y)
 
-        vehicle_angle = 0 
+        # 차량의 진행 방향 (x축 기준)
+        vehicle_angle = 0  # 차량이 기준으로 바라보는 방향 (여기서는 0도로 가정)
 
+        # 두 각도의 차이를 계산하여 조향각 구하기
         steering_angle = desired_angle - vehicle_angle
 
+        # 각도가 -π에서 π 사이로 변환
         steering_angle = math.degrees((steering_angle + math.pi) % (2 * math.pi) - math.pi)
 
         return steering_angle
