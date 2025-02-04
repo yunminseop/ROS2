@@ -33,6 +33,7 @@ setup(
             "MainServer = central_control.MainServer:main",
             "udp_receiver = central_control.MainServer:main",
             "img_sender = central_control.img_sender:main",
+            "PIDcontroller = central_control.PIDcontroller:main",
         ],
     },
 )
