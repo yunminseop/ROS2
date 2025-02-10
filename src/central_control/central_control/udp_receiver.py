@@ -33,6 +33,7 @@ class UdpReceiverNode(Node):
 
         # self.sign_subscriber = self.create_subscription(String, "/sign", self.sign_callback, 10)
         self.orient_subscriber = self.create_subscription(Int16, "/orient_hint", self.orient_determine, 10)
+
         self.publisher = self.create_publisher(Slope, "/slope", 10)
         self.signal_publisher = self.create_publisher(String, "/signal", 10)
         
@@ -44,7 +45,7 @@ class UdpReceiverNode(Node):
         
         self.__x, self.__y, self.__w, self.__h = 0, 400, 640, 240
         
-        self.orient = 0
+        self.orient = None
 
         # 중앙선 검출 좌표 초기화
         self.central_x = 320
@@ -84,6 +85,7 @@ class UdpReceiverNode(Node):
         return response
 
     def orient_determine(self, msg):
+        self.get_logger().info(f"msg.data: {msg.data}")
         self.orient = msg.data
 
     def choose_center(self, center_list):
@@ -95,15 +97,21 @@ class UdpReceiverNode(Node):
             centroid_list.append([idx, center.centroid_x])
 
         centroid_list.sort(key=lambda x: x[1])
+        # self.get_logger().info(f"self.orient: {self.orient}")
 
-        if self.orient != 0:
-            match self.orient:
-                case -1: # 좌회전
-                    res = min(centroid_list, key=lambda x: x[1])
-                    
-                case 1: # 우회전
-                    res = max(centroid_list, key=lambda x: x[1])
-            return res
+        res = None
+        match self.orient:
+            case -1: # 좌회전
+                self.get_logger().info(f"self.orient: {self.orient}")
+                res = min(centroid_list, key=lambda x: x[1])
+                self.get_logger().info(f"res: {res}")
+                
+            case 1: # 우회전
+                res = max(centroid_list, key=lambda x: x[1])
+        
+        self.get_logger().info(f"최종 res: {res}")
+        return res
+    
         """ 계산된 무게중심의 x좌표중 가장 크거나(우회전) 작은 값(좌회전의 인덱스를 반환 """
             
 
@@ -280,20 +288,20 @@ class UdpReceiverNode(Node):
                         self.center_list = []
                         for cls_id, mask, conf in zip(classes, masks, confidences):
                             if cls_id == 0: # center가 존재 시 center_list에 추가
-                                self.get_logger().info("1. center 존재")
+                                # self.get_logger().info("1. center 존재")
                                 self.center_list.append(mask)
                                 # 만약 center가 없으면 center_list는 빈 배열이 됨.
                                 
                     try:
                         # 만약 prev_center가 존재하고 center_list가 빈 배열이면 prev_center을 center로 취급
                         if len(self.prev_center) > 0 and len(self.center_list) == 0:
-                            self.get_logger().info("2. center 미존재, prev_center 존재 확인")
+                            # self.get_logger().info("2. center 미존재, prev_center 존재 확인")
                             self.center_list = []
                             self.center_list.append(self.prev_center)
 
                         # prev_center, center 둘 다 없으면 그냥 정면을 center로 취급
                         elif len(self.prev_center) == 0 and len(self.center_list) == 0:
-                            self.get_logger().info("3. NO mask, prev_center")
+                            # self.get_logger().info("3. NO mask, prev_center")
                             self.center_list = []
                             self.center_list.append(np.array([320, 640]))
                     except:
@@ -301,11 +309,11 @@ class UdpReceiverNode(Node):
                         # center_list가 없는 예외사항이니 error 발생
 
 
-                    try:
-                        self.get_logger().info(f"center_list 개수: {len(self.center_list)}개")
-                    except:
-                        pass
-                        # self.get_logger().info(f"center_list has only one element.")
+                    # try:
+                    #     self.get_logger().info(f"center_list 개수: {len(self.center_list)}개")
+                    # except:
+                    #     pass
+                    #     self.get_logger().info(f"center_list has only one element.")
 
 
                     if len(self.center_list) > 1:
@@ -493,7 +501,7 @@ class Centroid():
 
 
 def main(args=None):
-    seg_checkpoint_path = '/root/asap/data/seg_best3.pt'
+    seg_checkpoint_path = '/root/asap/data/seg_best5.pt'
     det_checkpoint_path = '/root/asap/data/det_best4.pt'
 
     device = "cuda" if torch.cuda.is_available() else "cpu"

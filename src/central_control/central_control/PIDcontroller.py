@@ -12,13 +12,14 @@ class PIDController(Node):
         super().__init__('pid_controller')
         
         self.cross_road_cnt = 0
-        self.absolute_linear_x = 0.25
-
-        self.__fix__ = 0.25
+    
+        #종방향 파라미터
+        self.absolute_linear_x = 0.24 # (절대 속도)
+        self.__fix__ = 0.24
         self._fix_linear_x = self.__fix__
         self.linear_Kp = 0.1
 
-        #횡방향 게인
+        #횡방향 파라미터
         self.declare_parameter('Kp', 1.6)
         self.declare_parameter('Ki', 0.08)
         self.declare_parameter('Kd', 0.08)
@@ -33,17 +34,6 @@ class PIDController(Node):
         
         self.pid_output = 0.0
 
-        #종방향 게인
-        # self.declare_parameter('l_Kp', 1.0)
-        # self.declare_parameter('l_Ki', 0.07)
-        # self.declare_parameter('l_Kd', 0.6)
-
-        # self.l_Kp = self.get_parameter('l_Kp').value
-        # self.l_Ki = self.get_parameter('l_Ki').value
-        # self.l_Kd = self.get_parameter('l_Kd').value
-
-        # self.linear_integral_limit = self.__fix__ * 0.2
-        # self.linear_integral_lower_limit = -self.linear_integral_limit
 
         self.vel_publisher = self.create_publisher(Twist, '/cmd_vel', 10)
         self.sign_publisher = self.create_publisher(String, '/sign', 10)
@@ -57,7 +47,7 @@ class PIDController(Node):
         self.client_obstacle = self.create_client(Obstacle, "/pinky1/obstacle")
         self.client_redlight = self.create_client(Redlight, "/pinky1/redlight")
 
-        self.create_timer(0.03, self.publish_cmd_vel)
+        # self.create_timer(0.03, self.publish_cmd_vel)
 
         self.arrival = False
 
@@ -75,12 +65,14 @@ class PIDController(Node):
 
     
     def arrival_sign(self, msg): # 목적지 도착 신호 실시간 구독
+        self.get_logger().info(f"arrival_sign: {msg.data}")
+        
         sign = msg.data
 
         if sign == 0:
             self.arrival = True
-        else:
-            self.arrival = False
+        # else:
+        #     self.arrival = False
 
     def send_obstacle_request(self, is_obstacle):
         req = Obstacle.Request()
@@ -179,30 +171,35 @@ class PIDController(Node):
         if self._fix_linear_x <= 0.02:
             self.pid_output = 0.0
             
-        if abs(self.pid_output - self.prev_pid_output) > 0.5:
-            self.get_logger().info("remove outlier PID Output")
-            self.pid_output = self.prev_pid_output
+        # if abs(self.pid_output - self.prev_pid_output) > 0.5:
+        #     self.get_logger().info("remove outlier PID Output")
+        #     self.pid_output = self.prev_pid_output
 
 
-    def publish_cmd_vel(self): # 최종 cmd_vel 발행
+    # def publish_cmd_vel(self): # 최종 cmd_vel 발행
 
         # cmd_vel 토픽 설정
         cmd_vel = Twist()
         cmd_vel.linear.x = self.absolute_linear_x #self._fix_linear_x
 
-        # 종방향 속도가 너무 느리면 각속도 = 0
-        if cmd_vel.linear.x <= 0.1:
-            self.pid_output = 0.0
-        else:
-            cmd_vel.angular.z = self.pid_output
 
-        self.prev_pid_output = self.pid_output
-
-        # 목적지 도착 신호를 받으면 무조건 정차
         if self.arrival:
+            self.get_logger().info(f"self.arrival: {self.arrival}, 정차 중..")
             cmd_vel.linear.x = 0.
             cmd_vel.angular.z = 0.
+        else:
+            self.arrival = False
+            # 종방향 속도가 너무 느리면 각속도 = 0
+            if cmd_vel.linear.x <= 0.1:
+                self.pid_output = 0.0
+            else:
+                cmd_vel.angular.z = self.pid_output
 
+            self.prev_pid_output = self.pid_output
+
+            # 목적지 도착 신호를 받으면 무조건 정차
+            
+            
         self.vel_publisher.publish(cmd_vel)
 
 
