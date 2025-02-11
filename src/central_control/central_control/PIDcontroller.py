@@ -40,7 +40,9 @@ class PIDController(Node):
         
         self.create_subscription(Slope, '/slope', self.slope_callback, 10)
         self.create_subscription(String, '/signal', self.detection_callback, 10)
-        self.orient_subscriber = self.create_subscription(Int16, "/orient_hint", self.arrival_sign, 10)
+        
+        self.orient_subscriber = self.create_subscription(Int16, "/orient_hint", self.mode_sign, 10)
+        self.arrival_subscriber = self.create_subscription(Int16, "/arrival_hint", self.arrival_sign, 10)
 
         self.create_timer(0.03, self.linear_controller)
 
@@ -62,17 +64,26 @@ class PIDController(Node):
         self.target_slope = 0.0
         self.error = 0.0
         self.prev_pid_output = 0.0
+        self.manual = False
 
-    
-    def arrival_sign(self, msg): # 목적지 도착 신호 실시간 구독
-        self.get_logger().info(f"arrival_sign: {msg.data}")
-        
+    def arrival_sign(self, msg): # 목적지 도착 신호
         sign = msg.data
-
         if sign == 0:
             self.arrival = True
-        # else:
-        #     self.arrival = False
+        elif sign == 1:
+            self.arrival = False
+        
+
+    def mode_sign(self, msg): # 수동/자율 모드
+        sign = msg.data
+
+        if sign == 3:
+            self.manual = True
+            self.get_logger().info(f"manual driving")
+        elif sign == 4:
+            self.manual = False
+            self.get_logger().info(f"autonomous driving")
+
 
     def send_obstacle_request(self, is_obstacle):
         req = Obstacle.Request()
@@ -141,66 +152,74 @@ class PIDController(Node):
             
    
     def slope_callback(self, msg): # 횡방향 속도 제어 (PID 제어)
-        if self.target_linear_x <= 0.17:
-            self.Kp = 1.2
-        else:
-            self.Kp = self.get_parameter('Kp').value
+        self.get_logger().info(f"self.arrival: {self.arrival}")
+        if not self.manual: # 자율주행 모드
 
-        error = msg.target_slope - msg.curr_slope
-        self.integral += error
-        derivative = error - self.prev_error
-        
-        if abs(error) < 0.01: 
-            self.integral = 0.0 
+            if not self.arrival: # 목적지에 도착하지 않았으면
+                if self.target_linear_x <= 0.17:
+                    self.Kp = 1.2
+                else:
+                    self.Kp = self.get_parameter('Kp').value
 
-        if self.integral > self.integral_limit:
-            self.integral = self.integral_limit
-        elif self.integral < self.integral_lower_limit:
-            self.integral = self.integral_lower_limit
+                error = msg.target_slope - msg.curr_slope
+                self.integral += error
+                derivative = error - self.prev_error
+                
+                if abs(error) < 0.01: 
+                    self.integral = 0.0 
 
-        self.pid_output = self.Kp * error + self.Ki * self.integral + self.Kd * derivative
-        self.prev_error = error
-        
-        self.pid_output /= -45.0
+                if self.integral > self.integral_limit:
+                    self.integral = self.integral_limit
+                elif self.integral < self.integral_lower_limit:
+                    self.integral = self.integral_lower_limit
 
-        if self.pid_output >= 0.99:
-            self.pid_output = 0.99
-        elif self.pid_output <= -0.99:
-            self.pid_output = -0.99
+                self.pid_output = self.Kp * error + self.Ki * self.integral + self.Kd * derivative
+                self.prev_error = error
+                
+                self.pid_output /= -45.0
 
-        if self._fix_linear_x <= 0.02:
-            self.pid_output = 0.0
-            
-        # if abs(self.pid_output - self.prev_pid_output) > 0.5:
-        #     self.get_logger().info("remove outlier PID Output")
-        #     self.pid_output = self.prev_pid_output
+                if self.pid_output >= 0.99:
+                    self.pid_output = 0.99
+                elif self.pid_output <= -0.99:
+                    self.pid_output = -0.99
 
-
-    # def publish_cmd_vel(self): # 최종 cmd_vel 발행
-
-        # cmd_vel 토픽 설정
-        cmd_vel = Twist()
-        cmd_vel.linear.x = self.absolute_linear_x #self._fix_linear_x
+                if self._fix_linear_x <= 0.02:
+                    self.pid_output = 0.0
+                    
+                # if abs(self.pid_output - self.prev_pid_output) > 0.5:
+                #     self.get_logger().info("remove outlier PID Output")
+                #     self.pid_output = self.prev_pid_output
 
 
-        if self.arrival:
-            self.get_logger().info(f"self.arrival: {self.arrival}, 정차 중..")
-            cmd_vel.linear.x = 0.
-            cmd_vel.angular.z = 0.
-        else:
-            self.arrival = False
-            # 종방향 속도가 너무 느리면 각속도 = 0
-            if cmd_vel.linear.x <= 0.1:
-                self.pid_output = 0.0
-            else:
-                cmd_vel.angular.z = self.pid_output
+            # def publish_cmd_vel(self): # 최종 cmd_vel 발행
 
-            self.prev_pid_output = self.pid_output
+                # cmd_vel 토픽 설정
+                cmd_vel = Twist()
 
-            # 목적지 도착 신호를 받으면 무조건 정차
-            
-            
-        self.vel_publisher.publish(cmd_vel)
+                cmd_vel.linear.x = self.absolute_linear_x #self._fix_linear_x
+                
+                # 종방향 속도가 너무 느리면 각속도 = 0
+                if cmd_vel.linear.x <= 0.1:
+                    self.pid_output = 0.0
+                else:
+                    cmd_vel.angular.z = self.pid_output
+
+                self.prev_pid_output = self.pid_output
+                # 목적지 도착 신호를 받으면 무조건 정차
+                    
+                self.vel_publisher.publish(cmd_vel)
+
+            else: # 목적지에 도착했으면
+                cmd_vel = Twist()
+
+                self.get_logger().info(f"self.arrival: {self.arrival}, 정차 중..")
+                cmd_vel.linear.x = 0.
+                cmd_vel.angular.z = 0.
+
+                self.vel_publisher.publish(cmd_vel)
+
+        else: # 수동주행 모드
+            return
 
 
 def main(args=None):

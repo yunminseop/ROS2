@@ -104,11 +104,11 @@ class UdpReceiverNode(Node):
             case -1: # 좌회전
                 self.get_logger().info(f"self.orient: {self.orient}")
                 res = min(centroid_list, key=lambda x: x[1])
-                self.get_logger().info(f"res: {res}")
+                self.get_logger().info(f"centroid_min: {res}")
                 
             case 1: # 우회전
                 res = max(centroid_list, key=lambda x: x[1])
-        
+                self.get_logger().info(f"centroid_max: {res}")
         self.get_logger().info(f"최종 res: {res}")
         return res
     
@@ -166,11 +166,11 @@ class UdpReceiverNode(Node):
                 """ object detection process """
                 
                 if det_results:
-                    if self.redlight == False and (self.obstacle == True or self.child_protect == True):
+                    if not self.redlight and (self.obstacle or self.child_protect):
                         self.slow_cnt += 1
 
                     #  장애물 혹은 어린이보호구역이 아닌 상태로 200count가 지나면 재가속
-                    if self.slow_cnt >= 200 and (self.obstacle == False and self.child_protect == False):
+                    if self.slow_cnt >= 200 and ( not self.obstacle and not self.child_protect):
                         self.avoid = False
                         self.slow_cnt = 0
                         sign = String()
