@@ -24,8 +24,6 @@ class UdpReceiverNode(Node):
         super().__init__('udp_receiver_node')
         self.seg_model = seg_model
         self.det_model = det_model
-        self.prev_redlight_status = False
-        self.prev_obstacle_status = False
 
         self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp_socket.bind(("192.168.100.8", 8080))
@@ -40,8 +38,8 @@ class UdpReceiverNode(Node):
         # self.avoid_timer = self.create_timer(0.033, self.avoid)
         self.execute_timer = self.create_timer(0.033, self.receive_and_command)
 
-        self.srv_obstacle = self.create_service(Obstacle, "/pinky1/obstacle", self.obstacle_callback)
-        self.srv_redlight = self.create_service(Redlight, "/pinky1/redlight", self.red_callback)
+        # self.srv_obstacle = self.create_service(Obstacle, "/pinky1/obstacle", self.obstacle_callback)
+        # self.srv_redlight = self.create_service(Redlight, "/pinky1/redlight", self.red_callback)
         
         self.__x, self.__y, self.__w, self.__h = 0, 400, 640, 240
         
@@ -61,32 +59,55 @@ class UdpReceiverNode(Node):
 
         self.choosepath = False
         self.obstacle = False   
+        self.organism = False
         self.redlight = False
         self.avoid = False
         self.go_left = False
         self.no_right = False
         self.child_protect = False
-        self.prev_child_protect = False
+        self.prev_lane_objective = False
+
+        # 목적지 저장용 변수
         self.destination = None
-        self.center_objective = None
+
+        # 이전 상태 저장용 변수
+        self.prev_redlight_status = False
+        self.prev_organism_status = False
+        self.prev_obstacle_status = False
+        self.prev_child_protect = False
+        self.prev_no_right = False
+        self.prev_right = False
+
+        self.organism_cnt = 0
+        self.obstacle_cnt = 0
+        self.no_right_cnt = 0
+        self.right_cnt = 0
+        self.organism_list = []
+        self.obstacle_list = []
+        self.no_right_list = []
+        self.right_list = []
 
         self.car_position = np.array([320, 940])
         self.prev_slope = 0.0
         self.slow_cnt = 0
 
-    def obstacle_callback(self,request, response):
-        self.get_logger().info(f"obstacle: {request.is_obstacle}")
-        response.avoid = self.obstacle
-        return response
+    # def obstacle_callback(self,request, response):
+    #     self.get_logger().info(f"obstacle: {request.is_obstacle}")
+    #     response.avoid = self.obstacle
+    #     return response
 
-    def red_callback(self, request, response):
-        self.get_logger().info(f"red: {request.is_red}")
-        response.stop = self.redlight
-        return response
+    # def red_callback(self, request, response):
+    #     self.get_logger().info(f"red: {request.is_red}")
+    #     response.stop = self.redlight
+    #     return response
 
     def orient_determine(self, msg):
-        self.get_logger().info(f"msg.data: {msg.data}")
+        if msg.data == 1:
+            self.get_logger().info("우향")
+        else:
+            self.get_logger().info("좌향")
         self.orient = msg.data
+
 
     def choose_center(self, center_list):
         center = Centroid()
@@ -100,16 +121,26 @@ class UdpReceiverNode(Node):
         # self.get_logger().info(f"self.orient: {self.orient}")
 
         res = None
+        if self.no_right : self.orient = -1 # 우회전 금지가 켜져있을 경우 무조건 왼쪽 center만 취급
+        if self.right: self.orient = 1 # 우회전 전용이 켜져있을 경우 무조건 오른쪽 center만 취급
+
         match self.orient:
             case -1: # 좌회전
-                self.get_logger().info(f"self.orient: {self.orient}")
-                res = min(centroid_list, key=lambda x: x[1])
-                self.get_logger().info(f"centroid_min: {res}")
+                # self.get_logger().info(f"self.orient: {self.orient}")
+                res = min(centroid_list, key=lambda x: x[1])[0]
+                self.get_logger().info("좌측 center 선택")
+                # self.get_logger().info(f"centroid_min: {res}")
                 
             case 1: # 우회전
-                res = max(centroid_list, key=lambda x: x[1])
-                self.get_logger().info(f"centroid_max: {res}")
-        self.get_logger().info(f"최종 res: {res}")
+                res = max(centroid_list, key=lambda x: x[1])[0]
+                self.get_logger().info("우측 center 선택")
+                # self.get_logger().info(f"centroid_max: {res}")
+
+        
+        if res is None:
+            self.get_logger().info(f"res: {res}, 진행방향 못 잡는 중..")
+        # else:
+        #     self.get_logger().info(f"res: {res}")
         return res
     
         """ 계산된 무게중심의 x좌표중 가장 크거나(우회전) 작은 값(좌회전의 인덱스를 반환 """
@@ -118,6 +149,7 @@ class UdpReceiverNode(Node):
     def receive_and_command(self):
         try:
             data, addr = self.udp_socket.recvfrom(65536)
+            print(data)
 
             np_array = np.frombuffer(data, dtype=np.uint8)
 
@@ -166,23 +198,15 @@ class UdpReceiverNode(Node):
                 """ object detection process """
                 
                 if det_results:
-                    if not self.redlight and (self.obstacle or self.child_protect):
-                        self.slow_cnt += 1
-
-                    #  장애물 혹은 어린이보호구역이 아닌 상태로 200count가 지나면 재가속
-                    if self.slow_cnt >= 200 and ( not self.obstacle and not self.child_protect):
-                        self.avoid = False
-                        self.slow_cnt = 0
-                        sign = String()
-                        sign.data = "reaccelerate"
-                        self.signal_publisher.publish(sign)
-
                     for det_result in det_results:
-                
+                        # self.get_logger().info(f"{self.organism_list}")
                         classes = det_result.boxes.cls.cpu().numpy()
                         boxes = det_result.boxes.xyxy.cpu().numpy()  # (x_min, y_min, x_max, y_max)
                         confidences = det_result.boxes.conf.cpu().numpy()
-
+                        self.organism_cnt = 0
+                        self.obstacle_cnt = 0
+                        self.no_right_cnt = 0
+                        self.right_cnt = 0
                         """ 우선 conf score 높은 장애물이 감지되면 obstacle 신호를 먼저 정하기.
                             1. 장애물 감지되면 obstacle = True
                             2. 장애물 안 보이면 obstacle = False
@@ -190,22 +214,24 @@ class UdpReceiverNode(Node):
 
                         for cls_id, box, conf in zip(classes, boxes, confidences):
                             object_ = self.det_model.names[int(cls_id)]
-                            # self.get_logger().info(f"object_: {object_}, conf: {conf}, box: {box}")
-                            # sign = String()
-                            # sign.data = object_
+                            # self.get_logger().info(f"object_: {object_}, conf: {conf}")
+                            sign = String()
+                            sign.data = object_
 
-                            # # 적신호 
-                            # if object_ == "red light" and 250 < box[3] < 300 and abs(box[3] - box[1]) > 150 and conf > 0.7:
-                            #     # self.get_logger().info(f"red light size: ((b[0]: {box[0]}, b[1]: {box[1]}, b[2]: {box[2]}, b[3]: {box[3]})")
-                            #     self.redlight = True
+                            # 적신호 
+                            if object_ == "red light" and 270 < box[3] < 300 and abs(box[3] - box[1]) > 50 and conf > 0.7:
+                                # self.get_logger().info(f"red light size: ((b[0]: {box[0]}, b[1]: {box[1]}, b[2]: {box[2]}, b[3]: {box[3]})")
+                                self.redlight = True
 
-                            # # 교차로
-                            # if object_ == "cross road" :#and 270 < box[2] - box[0] < 370 and 500 < box[3] < 600  and conf > 0.7:
-                            #     self.get_logger().info(f"cross road size: ((b[0]: {box[0]}, b[1]: {box[1]}, b[2]: {box[2]}, b[3]: {box[3]})")
-                            #     if self.redlight:
-                            #         if self.prev_redlight_status == False:
-                            #             self.signal_publisher.publish(sign)
-                            #         self.prev_redlight_status = True
+                            # 교차로
+                            if object_ == "cross road" and 435 < box[3] < 500  and conf > 0.7:
+                                # self.get_logger().info(f"fself.object_: {object_}, {conf:.2f}")
+                                # self.get_logger().info(f"cross road size: ((b[0]: {box[0]}, b[1]: {box[1]}, b[2]: {box[2]}, b[3]: {box[3]})")
+                                if self.redlight:
+                                    if self.prev_redlight_status == False:
+                                        sign.data = "red light"
+                                        self.signal_publisher.publish(sign)
+                                    self.prev_redlight_status = True
                             #     else:
                             #         """여기다가 내비게이션 interaction 코드 추가"""
 
@@ -221,33 +247,43 @@ class UdpReceiverNode(Node):
                             #             self.signal_publisher.publish(sign)
                             #             # self.prev_obstacle_status = True
 
-                            # # 사람, 염소
-                            # elif object_ in ["human", "goat"] and (380 < box[3] < 640) and (abs(box[3] - box[1]) > 200) and (290. < np.mean([box[2],box[0]]) < 370.) and conf > 0.8:
-                            #     self.get_logger().info(f"self.object_: {object_}, {conf:.2f}, {box}, self.prev_obstacle_status: {self.prev_obstacle_status}")
-                            #     if self.redlight != True:
-                            #         self.obstacle = True
-                            #         if self.prev_obstacle_status == False:
-                            #             # if object_ == "human":
-                            #                 # self.get_logger().info(f"human size: (b[0]: {box[0]}, b[1]: {box[1]}, b[2]: {box[2]}, b[3]: {box[3]})")
-                            #             # if object_ == "goat":
-                            #                 # self.get_logger().info(f"goat size: ((b[0]: {box[0]}, b[1]: {box[1]}, b[2]: {box[2]}, b[3]: {box[3]})")
+                            # 사람, 염소
+                            elif object_ in ["human", "goat"] and (270. < np.mean([box[2],box[0]]) < 390.): #and (abs(box[3] - box[1]) > 150)
+                                # self.get_logger().info(f"self.object_: {object_}, {conf:.2f}")
+                                if self.redlight != True:
+                                    self.organism = True
+                                    self.organism_cnt += 1
+                                    self.organism_list.insert(0, True)
+                                    if len(self.organism_list) > 30:
+                                        self.organism_list.pop()
+
+                                    if self.prev_organism_status == False:
+                                        # if object_ == "human":
+                                            # self.get_logger().info(f"human size: (b[0]: {box[0]}, b[1]: {box[1]}, b[2]: {box[2]}, b[3]: {box[3]})")
+                                        # if object_ == "goat":
+                                            # self.get_logger().info(f"goat size: ((b[0]: {box[0]}, b[1]: {box[1]}, b[2]: {box[2]}, b[3]: {box[3]})")
                                     
-                            #             self.signal_publisher.publish(sign)
-                            #             self.prev_obstacle_status = True
+                                        self.signal_publisher.publish(sign)
+                                        self.prev_organism_status = True
                             
-                            # # 장애물
+                            # 장애물
                             # elif object_ == "obstacle" and (340 < box[3] < 640) and (abs(box[3] - box[1]) > 150) and (290. < np.mean([box[2],box[0]]) < 370.) and conf > 0.3:
-                            #     self.get_logger().info(f"self.object_: {object_}, {conf:.2f}, {box}, self.prev_obstacle_status: {self.prev_obstacle_status}")
+                            #     # self.get_logger().info(f"self.object_: {object_}, {conf:.2f}, {box}, self.prev_obstacle_status: {self.prev_obstacle_status}")
                             #     if self.redlight != True:
                             #         self.obstacle = True
+                            #         self.obstacle_cnt += 1
+                            #         self.obstacle_list.insert(0, True)
+                            #         if len(self.organism_list) > 30:
+                            #             self.organism_list.pop()
+
                             #         if self.prev_obstacle_status == False:
-                            #             # self.get_logger().info(f"car size: ((b[0]: {box[0]}, b[1]: {box[1]}, b[2]: {box[2]}, b[3]: {box[3]})")
-                            #             self.signal_publisher.publish(sign)
+                            #         #     self.get_logger().info(f"car size: ((b[0]: {box[0]}, b[1]: {box[1]}, b[2]: {box[2]}, b[3]: {box[3]})")
+                            #             self.avoid = True
                             #             self.prev_obstacle_status = True
                                             
                             # # 어린이 보호구역
-                            # elif object_ == "child protect" and 250 < box[3] < 300 and abs(box[3]-box[1]) > 60 and conf > 0.8:
-                            #     # self.get_logger().info(f"child protect size: ((b[0]: {box[0]}, b[1]: {box[1]}, b[2]: {box[2]}, b[3]: {box[3]})")
+                            # elif object_ == "child protect" and conf > 0.7: #and 250 < box[3] < 300 and abs(box[3]-box[1]) > 60 and conf > 0.8:
+                            #     self.get_logger().info(f"fself.object_: {object_}, {conf:.2f}")
                             #     if self.redlight != True:
                             #         self.signal_publisher.publish(sign)
                             #         if self.prev_child_protect == False:
@@ -256,28 +292,116 @@ class UdpReceiverNode(Node):
 
                             # # 100 km 표지판
                             # elif object_ == "100KM" and conf > 0.8:
-                            #     # self.get_logger().info(f"100KM size: ((b[0]: {box[0]}, b[1]: {box[1]}, b[2]: {box[2]}, b[3]: {box[3]})")
+                            #     self.get_logger().info(f"fself.object_: {object_}, {conf:.2f}")
                             #     if self.redlight != True and self.child_protect:
                             #         self.prev_child_protect = False
                             #         self.child_protect = False
-                            #         self.signal_publisher.publish(sign)
+                                    
 
-                            # # 청신호
-                            # elif object_ == "green light" and conf > 0.8:
-                            #     self.redlight = False
-                            #     # self.get_logger().info(f"green light size: ({box}, self.redlight: {self.redlight}, self.obstacle: {self.obstacle}")
-                            #     if self.obstacle != True:
-                            #         self.signal_publisher.publish(sign)
-                            #         self.prev_redlight_status = False
+                            # 청신호
+                            elif object_ == "green light" and conf > 0.75:
+                                self.redlight = False
+                                # self.get_logger().info(f"green light size: ({box}, self.redlight: {self.redlight}, self.obstacle: {self.obstacle}")
+                                if not self.organism:
+                                    self.signal_publisher.publish(sign)
+                                    self.prev_redlight_status = False
             
-                            # # 우회전 금지 화살표
-                            # elif object_ == "no right" and 300 < np.mean([box[0], box[2]]) < 340 and conf > 0.8:
-                            #     self.no_right = True
-                            #     self.prev_no_right = True
+                            # 우회전 금지 화살표
+                            elif object_ == "no right" and 300 < np.mean([box[0], box[2]]) < 330 and (not box[2] < 320) and conf > 0.7:
+                                self.get_logger().info(f"fself.object_: {object_}, {conf:.2f}")
+                                self.no_right_cnt += 1
+                                self.no_right_list.insert(0, True)
+                                self.get_logger().info(f"우회전 금지!!!")
+                                if len(self.no_right_list) > 18:
+                                        self.no_right_list.pop()
+                                if not self.prev_no_right:
+                                    self.no_right = True
+                                    self.prev_no_right = True
+
+                            # 우회전 전용 화살표
+                            elif (object_ == "go" or object_ == "right") and 300 < np.mean([box[0], box[2]]) < 330 and conf > 0.7:
+                                self.right_cnt += 1
+                                self.right_list.insert(0, True)
+                                if object_ == "right":
+                                    self.get_logger().info(f"우회전만 가능!!")
+                                elif object_ == "go":
+                                    self.get_logger().info(f"직진만 기능!!")
+                                if len(self.right_list) > 18:
+                                        self.right_list.pop()
+                                if not self.prev_right:
+                                    self.right = True
+                                    self.prev_right = True
+
+                            # 사람, 염소 인식 카운트
+                        if self.organism_cnt == 0:
+                            self.organism_list.insert(0, False)
+                            if len(self.organism_list) > 30:
+                                self.organism_list.pop()
+
+                            
+                        # if self.obstacle_cnt == 0 :
+                        #     self.obstacle_list.insert(0, False)
+                        #     if len(self.obstacle_list) > 30:
+                        #         self.obstacle_list.pop()
+
+                            # 우회전 금지 화살표
+                        if self.no_right_cnt == 0:
+                            self.no_right_list.insert(0, False)
+                            if len(self.no_right_list) > 18 :
+                                self.no_right_list.pop()
+
+                            # 교차로 앞 우회전 및 직진 화살표 전용
+                        if self.right_cnt == 0:
+                            self.right_list.insert(0, False)
+                            if len(self.right_list) > 18 :
+                                self.right_list.pop()
+
+
+                            # 우회전 금지 화살표가 더 이상 안 보이면 
+                        if not(True in self.no_right_list):
+                            self.no_right = False
+                            self.prev_no_right = False
+
+                            # 우회전 및 직진 화살표가 더이상 안 보이면
+                        if not(True in self.right_list):
+                            self.right = False
+                            self.prev_right = False
+
+
+
+                            # 빨간 불이 아닐 때(평상 주행 시)
+                        if not self.redlight:
+                            # self.get_logger().info(f"이제 출발해야지, {self.organism}, {True in self.organism_list}")
+                            if self.organism and not(True in self.organism_list): # 장애물을 만난 상태인데 현재 프레임에 장애물이 포착되지 않았으면
+                                self.organism = False
+                                self.prev_organism_status = False
+
+                            if self.obstacle and not(True in self.obstacle_list):
+                                self.prev_obstacle_status = False
+                                self.avoid = False
+
+                    
+                        # not 빨간 불, not 어린이 보호구역, not 생명체 (여긴 지속적인 수정 필요)
+                        if not (self.organism or self.child_protect) and not self.redlight:
+                                sign = String()
+                                # self.get_logger().info(f"self.organism_list: {self.organism_list}")
+                                sign.data = "fine"
+                                self.signal_publisher.publish(sign)
+                            ###################################################################
+
+                        if len(self.organism_list) > 30:
+                            self.organism_list.pop()
+                        
+                        if len(self.obstacle_list) > 18:
+                            self.obstacle_list.pop()
+
+                        if len(self.right_list) > 18:
+                            self.right_list.pop()
+
                 
                 """ segmentation process """
                 for seg_result in seg_results:
-                    
+                    # self.get_logger().info(f"self.avoid: {self.avoid}")
                     classes = seg_result.boxes.cls.cpu().numpy() #cls_id = {0: center, 1: right, 2: left, 7: safety zone}
                     masks = seg_result.masks.xy if seg_result.masks else None
                     confidences = seg_result.boxes.conf.cpu().numpy()
@@ -287,10 +411,34 @@ class UdpReceiverNode(Node):
                     if masks is not None and len(masks) > 0:
                         self.center_list = []
                         for cls_id, mask, conf in zip(classes, masks, confidences):
+                            # if self.obstacle and self.avoid and cls_id == 2:
+                            #     self.get_logger().info("좌로 회피 중..")
+                            #     self.prev_lane_objective = cls_id
+                            #     self.center_list.append(mask)
+
+                            # if self.obstacle and self.avoid and cls_id == 1:
+                            #     self.get_logger().info("우로 회피 중..")
+                            #     self.prev_lane_objective = cls_id
+                            #     self.center_list.append(mask)
+
+                            # if (cls_id == 1 or cls_id == 0) and self.prev_lane_objective == 2 and not self.avoid and self.central_x:
+                            #     if cls_id == 0:
+                            #         self.get_logger().info("우로 복귀하는데 센터로 인식 중..")
+                            #     if cls_id == 1:
+                            #         self.get_logger().info("우로 복귀 중..")
+                            #     self.obstacle = False
+                            #     self.center_list.append(mask)
+
+                            # if cls_id == 2 and self.prev_lane_objective == 1 and not self.avoid:
+                            #     self.get_logger().info("좌로 복귀 중..")
+                            #     self.obstacle = False
+                            #     self.center_list.append(mask)
+                            
                             if cls_id == 0: # center가 존재 시 center_list에 추가
                                 # self.get_logger().info("1. center 존재")
                                 self.center_list.append(mask)
                                 # 만약 center가 없으면 center_list는 빈 배열이 됨.
+
                                 
                     try:
                         # 만약 prev_center가 존재하고 center_list가 빈 배열이면 prev_center을 center로 취급
@@ -414,7 +562,7 @@ class PurePursuit():
         else:
             trans_polygon[:, 1] -= int(dist)
         
-        if 0 <= np.abs(dist) <= 100:
+        if 0 <= np.abs(dist) <= 80:
             """ dist가 100이면 lah_d+=50
                 dist가 50이면 lah_d+=100
                 즉, 무게중심과 edge간 거리가 가까워질수록 lah_d는 비례증가"""
@@ -501,7 +649,7 @@ class Centroid():
 
 
 def main(args=None):
-    seg_checkpoint_path = '/root/asap/data/seg_best5.pt'
+    seg_checkpoint_path = '/root/asap/data/seg_best8.pt'
     det_checkpoint_path = '/root/asap/data/det_best4.pt'
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
